@@ -47,15 +47,17 @@ def main():
     '''
     config = CONFIGS_TM['TransMorph']
     model = TransMorph.TransMorph(config)
-    model.cuda()
+
+    device = torch.device('cpu')
+    #model.cuda()
 
     '''
     Initialize spatial transformation function
     '''
     reg_model = utils.register_model(config.img_size, 'nearest')
-    reg_model.cuda()
+    #reg_model.cuda()
     reg_model_bilin = utils.register_model(config.img_size, 'bilinear')
-    reg_model_bilin.cuda()
+    #reg_model_bilin.cuda()
 
     '''
     If continue from previous training
@@ -233,7 +235,15 @@ def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max
 
 if __name__ == '__main__':
     '''
+    CPU configuration
+    '''
+    print('Running on CPU.')
+    device = torch.device('cpu')
+    main()
+
+    '''
     GPU configuration
+    '''
     '''
     GPU_iden = 1
     GPU_num = torch.cuda.device_count()
@@ -246,3 +256,4 @@ if __name__ == '__main__':
     print('Currently using: ' + torch.cuda.get_device_name(GPU_iden))
     print('If the GPU is available? ' + str(GPU_avai))
     main()
+    '''
