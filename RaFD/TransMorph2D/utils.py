@@ -79,13 +79,14 @@ class SpatialTransformer(nn.Module):
         return F.grid_sample(src, new_locs, align_corners=True, mode=self.mode)
 
 class register_model(nn.Module):
-    def __init__(self, img_size=(64, 256, 256), mode='bilinear'):
+    def __init__(self, img_size=(64, 256, 256), mode='bilinear',  device='cpu'):
         super(register_model, self).__init__()
+        self.device = device
         self.spatial_trans = SpatialTransformer(img_size, mode)
 
     def forward(self, x):
-        img = x[0].cuda()
-        flow = x[1].cuda()
+        img = x[0].to(self.device)
+        flow = x[1].to(self.device)
         out = self.spatial_trans(img, flow)
         return out
 
@@ -254,12 +255,12 @@ def calc_uncert(tar, img_list):
     uncert = torch.mean(torch.cat(sqr_diffs, dim=0)[:], dim=0, keepdim=True)
     return uncert
 
-def calc_segs(seg, flows):
+def calc_segs(seg, flows, device='cpu'):
     segs = []
-    reg_model = register_model((160, 192, 224), 'nearest')
-    reg_model.cuda()
+    reg_model = register_model((160, 192, 224), 'nearest', device=device)
+
     for flow in flows:
-        def_seg = reg_model([seg.cuda().float(), flow.cuda()])
+        def_seg = reg_model([seg.to(device).float(), flow.to(device)])
         def_seg = def_seg.detach().cpu().numpy()[0, 0, :, :, :]
         segs.append(def_seg)
     return segs
