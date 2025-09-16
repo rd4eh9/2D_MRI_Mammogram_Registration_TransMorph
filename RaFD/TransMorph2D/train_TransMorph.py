@@ -27,9 +27,12 @@ class Logger(object):
         pass
 
 def main():
+    device = torch.device('cpu')  # CPU only
+    print(f"Using device: {device}")
+
     batch_size = 32
-    train_dir = 'E:/Junyu/DATA/RaFD/Train/'
-    val_dir = 'E:/Junyu/DATA/RaFD/Val/'
+    train_dir = 'E:/Junyu/DATA/RaFD/Train/' #change to mri-mammo directory
+    val_dir = 'E:/Junyu/DATA/RaFD/Val/' #change to mri-mammo directory
     weights = [1, 1] # loss weights
     save_dir = 'TransMorph_ssim_{}_diffusion_{}/'.format(weights[0], weights[1])
     if not os.path.exists('experiments/'+save_dir):
@@ -46,18 +49,15 @@ def main():
     Initialize model
     '''
     config = CONFIGS_TM['TransMorph']
-    model = TransMorph.TransMorph(config)
+    model = TransMorph.TransMorph(config).to(device)
 
-    device = torch.device('cpu')
-    #model.cuda()
+
 
     '''
     Initialize spatial transformation function
     '''
-    reg_model = utils.register_model(config.img_size, 'nearest')
-    #reg_model.cuda()
-    reg_model_bilin = utils.register_model(config.img_size, 'bilinear')
-    #reg_model_bilin.cuda()
+    reg_model = utils.register_model(config.img_size, 'nearest').to(device)
+    reg_model_bilin = utils.register_model(config.img_size, 'bilinear').to(device)
 
     '''
     If continue from previous training
@@ -80,8 +80,8 @@ def main():
                                          ])
     train_set = datasets.RaFDDataset(glob.glob(train_dir + '*.pkl'), transforms=train_composed)
     val_set = datasets.RaFDInferDataset(glob.glob(val_dir + '*.pkl'), transforms=None)
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
-    val_loader = DataLoader(val_set, batch_size=50, shuffle=False, num_workers=2, pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=False)
+    val_loader = DataLoader(val_set, batch_size=50, shuffle=False, num_workers=2, pin_memory=False)
 
     optimizer = optim.Adam(model.parameters(), lr=updated_lr, weight_decay=0, amsgrad=True)
     criterion = losses.SSIM_loss(False)
@@ -101,7 +101,7 @@ def main():
             idx += 1
             model.train()
             adjust_learning_rate(optimizer, epoch, max_epoch, lr)
-            data = [t.cuda() for t in data]
+            data = [t.to(device) for t in data]
             x = data[0]
             y = data[1]
             x_in = torch.cat((x,y), dim=1)
@@ -150,7 +150,7 @@ def main():
         with torch.no_grad():
             for data in val_loader:
                 model.eval()
-                data = [t.cuda() for t in data]
+                data = [t.to(device) for t in data]
                 x_rgb = data[0]
                 y_rgb = data[1]
                 x = data[2]
@@ -170,10 +170,10 @@ def main():
                 grid_img = mk_grid_img(8, 1, (x.shape[0], config.img_size[0], config.img_size[1]))
                 def_out = []
                 for idx in range(3):
-                    x_def = reg_model_bilin([x_rgb[..., idx].cuda().float(), output[1].cuda()])
+                    x_def = reg_model_bilin([x_rgb[..., idx].to(device).float(), output[1].to(device)])
                     def_out.append(x_def[..., None])
                 def_out = torch.cat(def_out, dim=-1)
-                def_grid = reg_model_bilin([grid_img.float(), output[1].cuda()])
+                def_grid = reg_model_bilin([grid_img.float(), output[1].to(device)])
 
                 print(eval_ncc.avg)
         best_ncc = max(eval_ncc.avg, best_ncc)
@@ -223,7 +223,7 @@ def mk_grid_img(grid_step, line_thickness=1, grid_sz=(64, 256, 256)):
     for i in range(0, grid_img.shape[2], grid_step):
         grid_img[:, :, i+line_thickness-1] = 1
     grid_img = grid_img[:, None, ...]
-    grid_img = torch.from_numpy(grid_img).cuda()
+    grid_img = torch.from_numpy(grid_img).to(torch.device('cpu'))
     return grid_img
 
 def save_checkpoint(state, save_dir='models', filename='checkpoint.pth.tar', max_model_num=4):
