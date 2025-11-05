@@ -109,10 +109,7 @@ def main():
             loss = 0
             loss_vals = []
             for n, loss_function in enumerate(criterions):
-                if n == 0:
-                    curr_loss = loss_function(output[n], y) * weights[n]
-                else:
-                    curr_loss = loss_function(output[n], y) * weights[n]
+                curr_loss = loss_function(output[n], y) * weights[n]
                 loss_vals.append(curr_loss)
                 loss += curr_loss
             loss_all.update(loss.item(), y.numel())
@@ -121,6 +118,8 @@ def main():
             loss.backward()
             optimizer.step()
 
+            #don't include flipped image pairs in training; not relevant/symmetric for mammo -> mri
+            '''
             del x_in
             del output
             # flip fixed and moving images
@@ -138,8 +137,8 @@ def main():
             # compute gradient and do SGD step
             optimizer.zero_grad()
             loss.backward()
-            optimizer.step()
-            print('Iter {} of {} loss {:.4f}, Img Sim: {:.6f}, Reg: {:.6f}'.format(idx, len(train_loader), loss.item(), loss_vals[0].item() / 2, loss_vals[1].item() / 2))
+            optimizer.step()'''
+            print('Iter {} of {} loss {:.4f}, Img Sim: {:.6f}, Reg: {:.6f}'.format(idx, len(train_loader), loss.item(), loss_vals[0].item(), loss_vals[1].item()))
 
         writer.add_scalar('Loss/train', loss_all.avg, epoch)
         print('Epoch {} loss {:.4f}'.format(epoch, loss_all.avg))
