@@ -4,6 +4,7 @@ import sys
 from torch.utils.data import DataLoader
 from data import datasets, trans
 import numpy as np
+import cv2
 import torch
 from torchvision import transforms
 from torch import optim
@@ -31,8 +32,8 @@ def main():
     print(f"Using device: {device}")
 
     batch_size = 32
-    train_dir = 'E:/Junyu/DATA/RaFD/Train/' #change to mri-mammo directory
-    val_dir = 'E:/Junyu/DATA/RaFD/Val/' #change to mri-mammo directory
+    train_dir = '/Users/rikki/PycharmProjects/MRI_DiffDRR/notebooks/output_pairs/train' # mri-mammo directory
+    val_dir = '/Users/rikki/PycharmProjects/MRI_DiffDRR/notebooks/output_pairs/val' # mri-mammo directory
     weights = [1, 1] # loss weights
     save_dir = 'TransMorph_ssim_{}_diffusion_{}/'.format(weights[0], weights[1])
     if not os.path.exists('experiments/'+save_dir):
@@ -44,6 +45,8 @@ def main():
     epoch_start = 0
     max_epoch = 400 #max traning epoch
     cont_training = False #if continue training
+    print('training data imported') #for debugging
+
 
     '''
     Initialize model
@@ -75,11 +78,30 @@ def main():
     '''
     Initialize training
     '''
+    train_files = glob.glob(os.path.join(train_dir, '*.pkl'))
+    val_files = glob.glob(os.path.join(val_dir, '*.pkl'))
+
+    print(f"Found {len(train_files)} training files")
+    print(f"Found {len(val_files)} validation files")
+
+    '''
     train_composed = transforms.Compose([trans.RandomFlip([2]),
                                          trans.NumpyType((np.float32, np.float32)),
                                          ])
-    train_set = datasets.RaFDDataset(glob.glob(train_dir + '*.pkl'), transforms=train_composed)
-    val_set = datasets.RaFDInferDataset(glob.glob(val_dir + '*.pkl'), transforms=None)
+    '''
+
+    train_composed = transforms.Compose([
+        trans.RandomFlip([2]),
+        ResizeTensor((224, 224)),
+        trans.NumpyType((np.float32, np.float32)),
+    ])
+
+
+    train_set = datasets.RaFDDataset(train_files, transforms=train_composed)
+    val_set = datasets.RaFDInferDataset(val_files, transforms=None)
+
+    #train_set = datasets.RaFDDataset(glob.glob(train_dir + '*.pkl'), transforms=train_composed)
+    #val_set = datasets.RaFDInferDataset(glob.glob(val_dir + '*.pkl'), transforms=None)
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=False)
     val_loader = DataLoader(val_set, batch_size=50, shuffle=False, num_workers=2, pin_memory=False)
 
@@ -104,8 +126,16 @@ def main():
             data = [t.to(device) for t in data]
             x = data[0]
             y = data[1]
-            x_in = torch.cat((x,y), dim=1)
+
+
+
+            x_single = x[:, :1, :, :]  # keep only the first channel
+            x_in = torch.cat((x_single,y), dim=1)
+
+
             output = model(x_in)
+            print(f"Training batch {idx}: x shape = {x_single.shape}, y shape = {y.shape}")
+            print(f"Concatenated input x_in shape = {x_in.shape}")
             loss = 0
             loss_vals = []
             for n, loss_function in enumerate(criterions):
@@ -155,13 +185,14 @@ def main():
                 x = data[2]
                 y = data[3]
 
-                x_in = torch.cat((y, x), dim=1)
+                x_single = x[:, :1, :, :]  # keep only the first channel
+                x_in = torch.cat((y, x_single), dim=1)
                 output = model(x_in)
                 ncc = ssim(output[0], x)
                 eval_ncc.update(ncc.item(), x.numel())
 
                 #flip image
-                x_in = torch.cat((x, y), dim=1)
+                x_in = torch.cat((x_single, y), dim=1)
                 output = model(x_in)
                 ncc = ssim(output[0], y)
                 eval_ncc.update(ncc.item(), y.numel())

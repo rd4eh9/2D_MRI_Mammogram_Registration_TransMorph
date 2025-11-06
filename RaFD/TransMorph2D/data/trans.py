@@ -1,6 +1,7 @@
 # import math
 import random
-import collections
+#import collections
+from collections.abc import Sequence
 import numpy as np
 import torch, sys, random, math
 from scipy import ndimage
@@ -28,7 +29,8 @@ class Base(object):
             # print(dim,shape) # 3, (240,240,155)
             self.sample(*shape)
 
-        if isinstance(img, collections.Sequence):
+        if isinstance(img, Sequence):
+        #if isinstance(img, collections.Sequence):
             return [self.tf(x, k) for k, x in enumerate(img)] # img:k=0,label:k=1
 
         return self.tf(img)
@@ -131,6 +133,35 @@ class Flip(Base):
         return 'Flip(axis={})'.format(self.axis)
 
 class RandomFlip(Base):
+    def __init__(self, axis=(1, 2)):
+        self.axis = axis
+
+    def sample(self, *shape):
+        # decide randomly for each axis whether to flip
+        self.buffers = [np.random.choice([True, False]) for _ in self.axis]
+        return list(shape)
+
+    def tf(self, img, k=0):
+        # Ensure img is a tensor
+        if not isinstance(img, torch.Tensor):
+            img = torch.tensor(img)
+
+        if self.axis and self.buffers:
+            for flip_flag, ax in zip(self.buffers, self.axis):
+                if flip_flag:
+                    # Only flip if axis is valid
+                    if -img.ndim <= ax < img.ndim:
+                        try:
+                            img = torch.flip(img, dims=(ax,))
+                        except Exception as e:
+                            print(f"Error flipping axis {ax} on image with shape {img.shape}: {e}")
+                            raise
+                    else:
+                        print(f"Skipping invalid axis {ax} for image with shape {img.shape}")
+        return img
+
+'''
+class RandomFlip(Base):
     # mirror flip across all x,y,z
     def __init__(self, axis=(1, 2)):
         # assert axis == (1,2,3) # For both data and label, it has to specify the axis.
@@ -155,12 +186,12 @@ class RandomFlip(Base):
             if self.y_buffer:
                 img = np.flip(img,axis=self.axis[0])
         return img
-
+'''
 
 class RandSelect(Base):
     def __init__(self, prob=0.5, tf=None):
         self.prob = prob
-        self.ops  = tf if isinstance(tf, collections.Sequence) else (tf, )
+        self.ops  = tf if isinstance(tf, Sequence) else (tf, )
         self.buff = False
 
     def sample(self, *shape):
@@ -480,16 +511,36 @@ class NumpyType(Base):
     def __init__(self, types, num=-1):
         self.types = types # ('float32', 'int64')
         self.num = num
+# mapping function
+_np_to_torch_dtype = {
+    np.float32: torch.float32,
+    np.float64: torch.float64,
+    np.int32: torch.int32,
+    np.int64: torch.long,
+    np.uint8: torch.uint8
+}
 
-    def tf(self, img, k=0):
-        if self.num > 0 and k >= self.num:
-            return img
-        # make this work with both Tensor and Numpy
-        return img.astype(self.types[k])
+def tf(self, img, k):
+    # if img is a numpy array, convert to tensor first
+    if isinstance(img, np.ndarray):
+        img = torch.from_numpy(img)
+    # convert dtype properly
+    dtype = _np_to_torch_dtype[self.types[k]]
+    return img.to(dtype)
 
     def __str__(self):
         s = ', '.join([str(s) for s in self.types])
         return 'NumpyType(({}))'.format(s)
+    '''
+    def tf(self, img, k=0):
+        if self.num > 0 and k >= self.num:
+            return img
+        # make this work with both Tensor and Numpy
+        return img.to(self.types[k])
+        #return img.astype(self.types[k])
+    '''
+
+
 
 
 class Normalize(Base):
@@ -511,7 +562,7 @@ class Normalize(Base):
 
 class Compose(Base):
     def __init__(self, ops):
-        if not isinstance(ops, collections.Sequence):
+        if not isinstance(ops, Sequence):
             ops = ops,
         self.ops = ops
 
