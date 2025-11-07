@@ -349,12 +349,47 @@ class Resize_img(Base):
         self.shape = shape
 
     def tf(self, img, k=0):
+        # Convert to numpy array if it's a PIL image or tensor
+        if hasattr(img, 'numpy'):
+            img = img.numpy()
+
+        # If batched, remove batch dimension
+        if img.ndim == 4:  # [N, C, H, W]
+            img = img[0]  # take first image in batch
+
+        # Ensure 3D: [C, H, W]
+        if img.ndim == 2:  # H, W
+            img = img[None, ...]  # add channel dimension
+        elif img.ndim == 3:
+            if img.shape[0] != 1 and img.shape[0] != 3:
+                # Possibly H, W, C
+                img = img.transpose(2, 0, 1)  # convert to C,H,W
+        else:
+            raise ValueError(f"Unexpected image shape: {img.shape}")
+
+        C, H, W = img.shape
+        zoom_factors = (1, self.shape[0] / H, self.shape[1] / W)
+
+        img = zoom(img, zoom_factors, order=3)
+        '''
         if img.shape[-1] == 3:
             img = zoom(img, (1, (self.shape[0] / img.shape[1]), (self.shape[1]/img.shape[2]), 1), order=3)
         else:
             img = zoom(img, (1, (self.shape[0] / img.shape[1]), (self.shape[1] / img.shape[2])), order=3)
         #resize(img, (img.shape[0], self.shape[0], self.shape[1]), anti_aliasing=False, order=3)
+        '''
         return img
+
+class ResizePair(object):
+    def __init__(self, shape):
+        self.shape = shape
+        self.resizer = Resize_img(shape)
+
+    def __call__(self, data):
+        moving, fixed = data
+        moving = self.resizer.tf(moving)
+        fixed = self.resizer.tf(fixed)
+        return moving, fixed
 
 
 class Pad(Base):

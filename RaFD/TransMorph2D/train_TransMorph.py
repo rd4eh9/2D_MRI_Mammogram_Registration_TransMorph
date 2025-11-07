@@ -14,6 +14,24 @@ from natsort import natsorted
 from models.TransMorph import CONFIGS as CONFIGS_TM
 import models.TransMorph as TransMorph
 from pytorch_msssim import ssim, ms_ssim, SSIM, MS_SSIM
+import torch.nn.functional as F
+
+def pad_to_multiple(x, multiple=16):
+    """Pad tensor spatially (H, W) so both are divisible by 'multiple'."""
+    _, _, h, w = x.shape
+    pad_h = (multiple - h % multiple) % multiple
+    pad_w = (multiple - w % multiple) % multiple
+    # Pad on right and bottom only
+    return F.pad(x, (0, pad_w, 0, pad_h)), pad_h, pad_w
+
+def crop_to_original(x, pad_h, pad_w):
+    """Crop back to remove padding added earlier."""
+    if pad_h > 0:
+        x = x[..., :-pad_h, :]
+    if pad_w > 0:
+        x = x[..., :, :-pad_w]
+    return x
+
 
 class Logger(object):
     def __init__(self, save_dir):
@@ -31,7 +49,7 @@ def main():
     device = torch.device('cpu')  # CPU only
     print(f"Using device: {device}")
 
-    batch_size = 32
+    batch_size = 4
     train_dir = '/Users/rikki/PycharmProjects/MRI_DiffDRR/notebooks/output_pairs/train' # mri-mammo directory
     val_dir = '/Users/rikki/PycharmProjects/MRI_DiffDRR/notebooks/output_pairs/val' # mri-mammo directory
     weights = [1, 1] # loss weights
@@ -84,21 +102,17 @@ def main():
     print(f"Found {len(train_files)} training files")
     print(f"Found {len(val_files)} validation files")
 
-    '''
-    train_composed = transforms.Compose([trans.RandomFlip([2]),
-                                         trans.NumpyType((np.float32, np.float32)),
-                                         ])
-    '''
-
     train_composed = transforms.Compose([
+        trans.ResizePair((256, 256)),  # ✅ ensures both images resized
         trans.RandomFlip([2]),
-        ResizeTensor((224, 224)),
         trans.NumpyType((np.float32, np.float32)),
     ])
 
 
+
     train_set = datasets.RaFDDataset(train_files, transforms=train_composed)
-    val_set = datasets.RaFDInferDataset(val_files, transforms=None)
+    val_set = datasets.RaFDInferDataset(val_files, transforms=trans.ResizePair((256, 256)))
+
 
     #train_set = datasets.RaFDDataset(glob.glob(train_dir + '*.pkl'), transforms=train_composed)
     #val_set = datasets.RaFDInferDataset(glob.glob(val_dir + '*.pkl'), transforms=None)
@@ -127,13 +141,21 @@ def main():
             x = data[0]
             y = data[1]
 
-
-
+            #added this
             x_single = x[:, :1, :, :]  # keep only the first channel
-            x_in = torch.cat((x_single,y), dim=1)
+            x_in = torch.cat((x_single, y), dim=1)
 
+            # --- Pad to multiple of 16 to avoid mismatch ---
+            x_in, pad_h, pad_w = pad_to_multiple(x_in, multiple=16)
 
             output = model(x_in)
+
+            # --- Crop output back to match original shape ---
+            if isinstance(output, (list, tuple)):
+                output = [crop_to_original(o, pad_h, pad_w) for o in output]
+            else:
+                output = crop_to_original(output, pad_h, pad_w)
+
             print(f"Training batch {idx}: x shape = {x_single.shape}, y shape = {y.shape}")
             print(f"Concatenated input x_in shape = {x_in.shape}")
             loss = 0
@@ -185,22 +207,59 @@ def main():
                 x = data[2]
                 y = data[3]
 
-                x_single = x[:, :1, :, :]  # keep only the first channel
+                #added this
+                x_single = x[:, :1, :, :]
                 x_in = torch.cat((y, x_single), dim=1)
+
+                x_in, pad_h, pad_w = pad_to_multiple(x_in, multiple=16)
                 output = model(x_in)
+                if isinstance(output, (list, tuple)):
+                    output = [crop_to_original(o, pad_h, pad_w) for o in output]
+                else:
+                    output = crop_to_original(output, pad_h, pad_w)
+
                 ncc = ssim(output[0], x)
                 eval_ncc.update(ncc.item(), x.numel())
 
                 #flip image
+                #added this
                 x_in = torch.cat((x_single, y), dim=1)
+                x_in, pad_h, pad_w = pad_to_multiple(x_in, multiple=16)
                 output = model(x_in)
+                if isinstance(output, (list, tuple)):
+                    output = [crop_to_original(o, pad_h, pad_w) for o in output]
+                else:
+                    output = crop_to_original(output, pad_h, pad_w)
                 ncc = ssim(output[0], y)
                 eval_ncc.update(ncc.item(), y.numel())
 
                 grid_img = mk_grid_img(8, 1, (x.shape[0], config.img_size[0], config.img_size[1]))
                 def_out = []
                 for idx in range(3):
-                    x_def = reg_model_bilin([x_rgb[..., idx].to(device).float(), output[1].to(device)])
+                    # Select the image slice
+                    img_input = x_rgb[..., idx]  # could be [H, W] or [C, H, W]
+
+                    # Ensure it has batch and channel dimensions
+                    if img_input.ndim == 2:  # [H, W]
+                        img_input = img_input.unsqueeze(0).unsqueeze(0)  # -> [1, 1, H, W]
+                    elif img_input.ndim == 3:  # [C, H, W]
+                        img_input = img_input.unsqueeze(0)  # -> [1, C, H, W]
+
+                    # Take the flow/grid
+                    grid = output[1]  # may be [1, 2, H, W]
+
+                    # Permute grid to match [N, H, W, 2] for grid_sample
+                    if grid.ndim == 4 and grid.shape[1] == 2:
+                        grid = grid.permute(0, 2, 3, 1)  # [N, H, W, 2]
+
+                    # Move to device and float
+                    img_input = img_input.to(device).float()
+                    grid = grid.to(device).float()
+
+                    # Call the registration model
+                    x_def = reg_model_bilin([img_input, grid])
+
+                    #x_def = reg_model_bilin([x_rgb[..., idx].to(device).float(), output[1].to(device)])
                     def_out.append(x_def[..., None])
                 def_out = torch.cat(def_out, dim=-1)
                 def_grid = reg_model_bilin([grid_img.float(), output[1].to(device)])

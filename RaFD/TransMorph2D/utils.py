@@ -59,24 +59,63 @@ class SpatialTransformer(nn.Module):
         self.register_buffer('grid', grid)
 
     def forward(self, src, flow):
-        # new locations
-        new_locs = self.grid + flow
-        shape = flow.shape[2:]
+        """
+        src: [N, C, H, W]
+        flow: [N, 2, H, W]
+        """
 
-        # need to normalize grid values to [-1, 1] for resampler
-        for i in range(len(shape)):
-            new_locs[:, i, ...] = 2 * (new_locs[:, i, ...] / (shape[i] - 1) - 0.5)
+        # Ensure src is 4D
+        if src.ndim == 3:  # [C, H, W] -> add batch dimension
+            src = src.unsqueeze(0)  # [1, C, H, W]
 
-        # move channels dim to last position
-        # also not sure why, but the channels need to be reversed
-        if len(shape) == 2:
-            new_locs = new_locs.permute(0, 2, 3, 1)
-            new_locs = new_locs[..., [1, 0]]
-        elif len(shape) == 3:
-            new_locs = new_locs.permute(0, 2, 3, 4, 1)
-            new_locs = new_locs[..., [2, 1, 0]]
+        # Ensure flow is 4D
+        if flow.ndim == 3:  # [2, H, W] -> add batch dimension
+            flow = flow.unsqueeze(0)  # [1, 2, H, W]
 
-        return F.grid_sample(src, new_locs, align_corners=True, mode=self.mode)
+        N = src.shape[0]
+        dims = src.ndim - 2  # 2 for 2D, 3 for 3D
+        vol_shape = src.shape[2:]  # H, W or D, H, W
+
+        # Dynamically create grid to match src shape
+        vectors = [torch.arange(0, s, device=src.device) for s in vol_shape]
+        grids = torch.meshgrid(*vectors, indexing='ij')  # [H, W] or [D, H, W]
+        grid = torch.stack(grids, dim=-1).float()  # [H, W, 2] or [D, H, W, 3]
+        grid = grid.unsqueeze(0).expand(N, *grid.shape)  # [N, H, W, 2] or [N, D, H, W, 3]
+
+        # Make sure flow has batch dimension
+        if flow.ndim == dims + 1:  # missing batch dim
+            flow = flow.unsqueeze(0)
+
+        # Permute flow to last dimension
+        if dims == 2:
+            flow_perm = flow.permute(0, 2, 3, 1)  # [N, H, W, 2]
+        elif dims == 3:
+            flow_perm = flow.permute(0, 2, 3, 4, 1)  # [N, D, H, W, 3]
+
+        #flow_perm = flow.permute(0, *range(2, 2 + dims), 1)  # [N, H, W, 2] or [N, D, H, W, 3]
+
+        # Add flow to grid
+        new_locs = grid + flow_perm
+
+        # Normalize to [-1, 1] for grid_sample
+        for i, s in enumerate(vol_shape):
+            new_locs[..., i] = 2.0 * (new_locs[..., i] / (s - 1) - 0.5)
+
+        # Swap dimensions for grid_sample
+        if dims == 2:
+            new_locs = new_locs[..., [1, 0]]  # y, x
+        elif dims == 3:
+            new_locs = new_locs[..., [2, 1, 0]]  # z, y, x
+
+        # Select correct mode
+        mode = self.mode
+        if dims == 3 and mode == 'bilinear':
+            mode = 'trilinear'
+        elif dims == 3 and mode == 'nearest':
+            mode = 'nearest'
+
+        return F.grid_sample(src, new_locs, align_corners=True, mode=mode)
+
 
 class register_model(nn.Module):
     def __init__(self, img_size=(64, 256, 256), mode='bilinear',  device='cpu'):

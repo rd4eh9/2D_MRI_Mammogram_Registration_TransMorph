@@ -703,6 +703,16 @@ class DecoderBlock(nn.Module):
     def forward(self, x, skip=None):
         x = self.up(x)
         if skip is not None:
+            if x.shape[2:] != skip.shape[2:]:
+                diffY = skip.size(2) - x.size(2)
+                diffX = skip.size(3) - x.size(3)
+                # Pad x if smaller than skip
+                if diffY > 0 or diffX > 0:
+                    x = F.pad(x, [diffX // 2, diffX - diffX // 2,
+                                  diffY // 2, diffY - diffY // 2])
+                # Or crop if larger
+                elif diffY < 0 or diffX < 0:
+                    x = x[:, :, :skip.size(2), :skip.size(3)]
             x = torch.cat([x, skip], dim=1)
         x = self.conv1(x)
         x = self.conv2(x)
